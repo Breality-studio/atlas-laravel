@@ -63,28 +63,46 @@
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\""
         ],
         "post-create-project-cmd": [
-            "echo \"\"",
-            "echo \"=================================================================\"",
-            "echo \"Projet Breality Atlas créé avec succès !\"",
-            "echo \"=================================================================\"",
-            "echo \"\"",
-            "echo \"Étapes suivantes :\"",
-            "echo \"1. Exécutez : php artisan atlas:setup\"",
-            "echo \"   Cette commande vous guidera interactivement pour configurer :\"",
-            "echo \"      • Nom et vendor du projet\"",
-            "echo \"      • Base de données\"",
-            "echo \"      • Stack frontend (Blade, Breeze, Jetstream, Inertia, API only, etc.)\"",
-            "echo \"      • Packages supplémentaires optionnels\"",
-            "echo \"   Elle installera automatiquement les dépendances nécessaires.\"",
-            "echo \"\"",
-            "echo \"2. Après la configuration, lancez votre projet normalement :\"",
-            "echo \"   • php artisan serve\"",
-            "echo \"   • npm run dev\"",
-            "echo \"=================================================================\"",
-            "echo \"\""
+            "@php artisan key:generate --ansi"
+        ],
+        "post-install-cmd": [
+            "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
+            "@php artisan package:discover --ansi",
+            "@php artisan atlas:setup",
+            "@welcome-atlas"
         ],
         "pre-package-uninstall": [
             "Illuminate\\Foundation\\ComposerScripts::prePackageUninstall"
+        ],
+        "welcome-atlas": [
+            "echo ''",
+            "echo '🚀 Bienvenue dans votre nouveau projet Atlas-Laravel par Breality !'",
+            "echo ''",
+            "echo '✅ Initialisation terminée avec succès :' ",
+            "echo '   • Fichier .env créé à partir de .env.example'",
+            "echo '   • Clé d\\'application générée'",
+            "echo '   • Configuration Atlas appliquée via atlas:setup'",
+            "echo ''",
+            "echo '📂 Prochaines étapes :' ",
+            "echo ''",
+            "echo '   1. Configurez votre fichier .env (base de données, mail, etc.)'",
+            "echo ''",
+            "echo '   2. Installez les dépendances front-end :' ",
+            "echo '      npm install && npm run dev'",
+            "echo ''",
+            "echo '   3. Lancez les migrations :' ",
+            "echo '      php artisan migrate'",
+            "echo ''",
+            "echo '   4. Démarrez le serveur de développement :' ",
+            "echo '      php artisan serve'",
+            "echo ''",
+            "echo '📚 Pour générer/regénérer la documentation API :' ",
+            "echo '      php artisan scribe:generate'",
+            "echo ''",
+            "echo '💡 Astuce : utilisez \"php artisan atlas:feature NomFeature\" pour générer rapidement une nouvelle fonctionnalité complète.'",
+            "echo ''",
+            "echo '🌟 Bonne développement avec Breality Atlas !'",
+            "echo ''"
         ]
     },
     "extra": {
