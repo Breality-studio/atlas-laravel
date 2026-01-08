@@ -17,6 +17,7 @@ class AtlasServiceProvider extends ServiceProvider
     {
         $this->commands([
             \Breality\AtlasCore\Commands\AtlasSetup::class,
+            \Breality\AtlasCore\Commands\AtlasNextSteps::class,
             \Breality\AtlasCore\Commands\CheckSetup::class,
             \Breality\AtlasCore\Commands\MakeContract::class,
             \Breality\AtlasCore\Commands\MakeFeature::class,
