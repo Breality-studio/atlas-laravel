@@ -63,12 +63,12 @@
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\""
         ],
         "post-create-project-cmd": [
-            "@php artisan key:generate --ansi"
+            "@php artisan key:generate --ansi",
+            "@welcome-atlas --ainsi"
         ],
         "post-install-cmd": [
             "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
             "@php artisan package:discover --ansi",
-            "@php artisan atlas:setup",
             "@welcome-atlas"
         ],
         "pre-package-uninstall": [
@@ -85,7 +85,7 @@
             "echo ''",
             "echo '📂 Prochaines étapes :' ",
             "echo ''",
-            "echo '   1. Configurez votre fichier .env (base de données, mail, etc.)'",
+            "echo '   1. cd <project_directory> && php artisan atlas:setup pour finaliser la configuration si nécessaire.' ",
             "echo ''",
             "echo '   2. Installez les dépendances front-end :' ",
             "echo '      npm install && npm run dev'",
