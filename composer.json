@@ -3,7 +3,12 @@
     "name": "breality/atlas-laravel",
     "type": "project",
     "description": "Atlas-Laravel: starter officiel Breality pour Laravel avec génération automatique de features, services, tests et documentation.",
-    "keywords": ["laravel", "framework", "atlas", "breality"],
+    "keywords": [
+        "laravel",
+        "framework",
+        "atlas",
+        "breality"
+    ],
     "license": "MIT",
     "require": {
         "php": "^8.2",
@@ -58,8 +63,25 @@
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\""
         ],
         "post-create-project-cmd": [
-            "@php artisan key:generate --ansi",
-            "@php artisan atlas:setup"
+            "echo \"\"",
+            "echo \"=================================================================\"",
+            "echo \"Projet Breality Atlas créé avec succès !\"",
+            "echo \"=================================================================\"",
+            "echo \"\"",
+            "echo \"Étapes suivantes :\"",
+            "echo \"1. Exécutez : php artisan atlas:setup\"",
+            "echo \"   Cette commande vous guidera interactivement pour configurer :\"",
+            "echo \"      • Nom et vendor du projet\"",
+            "echo \"      • Base de données\"",
+            "echo \"      • Stack frontend (Blade, Breeze, Jetstream, Inertia, API only, etc.)\"",
+            "echo \"      • Packages supplémentaires optionnels\"",
+            "echo \"   Elle installera automatiquement les dépendances nécessaires.\"",
+            "echo \"\"",
+            "echo \"2. Après la configuration, lancez votre projet normalement :\"",
+            "echo \"   • php artisan serve\"",
+            "echo \"   • npm run dev\"",
+            "echo \"=================================================================\"",
+            "echo \"\""
         ],
         "pre-package-uninstall": [
             "Illuminate\\Foundation\\ComposerScripts::prePackageUninstall"

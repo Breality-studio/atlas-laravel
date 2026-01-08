@@ -144,7 +144,7 @@ class AtlasSetup extends Command
         $envContent = file_get_contents($envPath);
 
         $replacements = [
-            'APP_NAME' => preg_replace("/['\"]/", '', $projectName),  // Mise à jour de APP_NAME si souhaité
+            'APP_NAME' => preg_replace("/['\"]/", '', $projectName),
             'DB_CONNECTION' => $dbType,
             'DB_HOST' => $dbHost ?? '',
             'DB_PORT' => $dbPort ?? '',
@@ -188,7 +188,7 @@ class AtlasSetup extends Command
 
         $this->info("Configuration du stack frontend : {$frontendOptions[$frontendKey]}");
 
-        // Installation basée sur le choix (intègre tous les éléments des kits officiels)
+        // Installation basée sur le choix
         $this->installFrontendStack($frontendKey);
 
         // 8. Installations supplémentaires
@@ -204,10 +204,53 @@ class AtlasSetup extends Command
             }
         }
 
+        // 9. Installation finale des dépendances Composer
+        $this->newLine();
+        $this->info('Installation des dépendances Composer (composer install)...');
+        $process = new Process(['composer', 'install', '--optimize-autoloader', '--no-interaction']);
+        $process->setTimeout(null);
+        $process->run(function ($type, $buffer) {
+            $this->output->write($buffer);
+        });
+
+        if (!$process->isSuccessful()) {
+            $this->error('Échec de l\'installation des dépendances Composer.');
+            return 1;
+        }
+        $this->info('Dépendances Composer installées avec succès.');
+
+        // 10. Installation des dépendances Node.js si nécessaire
+        $frontendNeedsNpm = in_array($frontendKey, [
+            'inertia-vue',
+            'inertia-react',
+            'breeze-blade',
+            'breeze-livewire',
+            'breeze-inertia-vue',
+            'breeze-inertia-react',
+            'jetstream-livewire',
+            'jetstream-inertia-vue',
+            'jetstream-inertia-react'
+        ]);
+
+        if ($frontendNeedsNpm && File::exists(base_path('package.json'))) {
+            $this->newLine();
+            $this->info('Installation des dépendances NPM (npm install)...');
+            $this->runNpmCommand(['install']);
+            $this->info('Dépendances NPM installées. Vous pouvez lancer le frontend avec : npm run dev');
+        }
+
+        // 11. Génération de la clé d'application
+        $this->newLine();
+        $this->info('Génération de la clé d\'application...');
+        $this->call('key:generate', ['--ansi' => true, '--force' => true]);
+
+        $this->newLine();
         $this->info('=== Breality Atlas Setup terminé avec succès ===');
-        $this->comment('Vous pouvez maintenant modifier les paramètres supplémentaires si nécessaire, puis exécuter :');
-        $this->line('php artisan migrate');
-        $this->line('php artisan atlas:make ...');
+        $this->comment('Vous pouvez maintenant :');
+        $this->line('• Exécuter les migrations : php artisan migrate');
+        $this->line('• Lancer le serveur : php artisan serve');
+        $this->line('• Compiler les assets (si frontend) : npm run dev');
+        $this->line('• Utiliser les commandes Atlas : php artisan atlas:make ...');
 
         return 0;
     }
@@ -275,28 +318,24 @@ class AtlasSetup extends Command
     }
 
     /**
-     * Installe le stack frontend choisi, en intégrant tous les éléments (vues, controllers, migrations, etc.).
+     * Installe le stack frontend choisi.
      */
     protected function installFrontendStack(string $stack): void
     {
         switch ($stack) {
             case 'api':
-                // Configuration pour API only : utilise Sanctum (déjà requis), publie configs, migrations, routes API de base
                 $this->runArtisanCommand(['vendor:publish', '--provider=Laravel\Sanctum\SanctumServiceProvider']);
-                // Ajoute un controller API de base si nécessaire
                 if (!File::exists(app_path('Http/Controllers/Api/ExampleController.php'))) {
                     File::makeDirectory(app_path('Http/Controllers/Api'), 0755, true);
                     File::put(app_path('Http/Controllers/Api/ExampleController.php'), "<?php\n\nnamespace App\\Http\\Controllers\\Api;\n\nuse App\\Http\\Controllers\\Controller;\n\nclass ExampleController extends Controller\n{\n    public function index()\n    {\n        return response()->json(['message' => 'API ready']);\n    }\n}");
                     $this->info('Controller API de base créé.');
                 }
-                // Mise à jour des routes/api.php si nécessaire
                 $apiRoutesPath = base_path('routes/api.php');
                 $apiRoutesContent = File::get($apiRoutesPath);
                 if (strpos($apiRoutesContent, 'ExampleController') === false) {
                     File::append($apiRoutesPath, "\nRoute::get('/example', [ExampleController::class, 'index']);");
                     $this->info('Route API de base ajoutée.');
                 }
-                // Supprime les vues web inutiles si API only
                 File::delete(resource_path('views/welcome.blade.php'));
                 $this->info('Vues web supprimées pour mode API only.');
                 break;
@@ -357,7 +396,7 @@ class AtlasSetup extends Command
 
             case 'jetstream-api':
                 $this->installPackage('laravel/jetstream');
-                $this->runArtisanCommand(['jetstream:install', 'livewire', '--api']); // Jetstream utilise Livewire ou Inertia, mais --api ajoute API features
+                $this->runArtisanCommand(['jetstream:install', 'livewire', '--api']);
                 $this->runNpmCommand(['install']);
                 $this->runNpmCommand(['run', 'build']);
                 break;
@@ -378,14 +417,11 @@ class AtlasSetup extends Command
 
             case 'blade':
             default:
-                // Maintien de Blade par défaut : assure les vues, controllers, migrations de base
                 $this->info('Stack Blade par défaut sélectionné. Configuration des éléments de base...');
-                // Crée un controller de base si absent
                 if (!File::exists(app_path('Http/Controllers/WelcomeController.php'))) {
                     File::put(app_path('Http/Controllers/WelcomeController.php'), "<?php\n\nnamespace App\\Http\\Controllers;\n\nuse Illuminate\\View\\View;\n\nclass WelcomeController extends Controller\n{\n    public function index(): View\n    {\n        return view('welcome');\n    }\n}");
                     $this->info('Controller de base créé.');
                 }
-                // Mise à jour des routes/web.php
                 $webRoutesPath = base_path('routes/web.php');
                 $webRoutesContent = File::get($webRoutesPath);
                 if (strpos($webRoutesContent, 'WelcomeController') === false) {
@@ -393,7 +429,6 @@ class AtlasSetup extends Command
                     File::put($webRoutesPath, $webRoutesContent);
                     $this->info('Route web de base mise à jour.');
                 }
-
                 break;
         }
     }
