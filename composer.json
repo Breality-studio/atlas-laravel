@@ -64,45 +64,10 @@
         ],
         "post-create-project-cmd": [
             "@php artisan key:generate --ansi",
-            "@welcome-atlas --ainsi"
-        ],
-        "post-install-cmd": [
-            "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
-            "@php artisan package:discover --ansi",
-            "@welcome-atlas"
+            "@php artisan atlas:next-steps"
         ],
         "pre-package-uninstall": [
             "Illuminate\\Foundation\\ComposerScripts::prePackageUninstall"
-        ],
-        "welcome-atlas": [
-            "echo ''",
-            "echo '🚀 Bienvenue dans votre nouveau projet Atlas-Laravel par Breality !'",
-            "echo ''",
-            "echo '✅ Initialisation terminée avec succès :' ",
-            "echo '   • Fichier .env créé à partir de .env.example'",
-            "echo '   • Clé d\\'application générée'",
-            "echo '   • Configuration Atlas appliquée via atlas:setup'",
-            "echo ''",
-            "echo '📂 Prochaines étapes :' ",
-            "echo ''",
-            "echo '   1. cd <project_directory> && php artisan atlas:setup pour finaliser la configuration si nécessaire.' ",
-            "echo ''",
-            "echo '   2. Installez les dépendances front-end :' ",
-            "echo '      npm install && npm run dev'",
-            "echo ''",
-            "echo '   3. Lancez les migrations :' ",
-            "echo '      php artisan migrate'",
-            "echo ''",
-            "echo '   4. Démarrez le serveur de développement :' ",
-            "echo '      php artisan serve'",
-            "echo ''",
-            "echo '📚 Pour générer/regénérer la documentation API :' ",
-            "echo '      php artisan scribe:generate'",
-            "echo ''",
-            "echo '💡 Astuce : utilisez \"php artisan atlas:feature NomFeature\" pour générer rapidement une nouvelle fonctionnalité complète.'",
-            "echo ''",
-            "echo '🌟 Bonne développement avec Breality Atlas !'",
-            "echo ''"
         ]
     },
     "extra": {
