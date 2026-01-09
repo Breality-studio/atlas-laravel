@@ -3,7 +3,7 @@
 namespace Breality\AtlasCore\Commands;
 
 use Illuminate\Console\Command;
-use Breality\AtlasCore\Generators\ContractGenerator;
+use Breality\Atlas\Generators\ContractGenerator;
 
 /**
  * Class MakeContract

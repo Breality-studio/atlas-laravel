@@ -4,8 +4,8 @@ namespace Breality\AtlasCore\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
-use Breality\AtlasCore\Generators\DocGenerator;
-use Breality\AtlasCore\Generators\FeatureGenerator;
+use Breality\Atlas\Generators\DocGenerator;
+use Breality\Atlas\Generators\FeatureGenerator;
 
 /**
  * Class WatchDocs
@@ -34,7 +34,7 @@ class WatchDocs extends Command
     public function handle(): int
     {
         $interval = config('atlas.watcher.interval', 2);
-        $this->info("=== Atlas :: Watcher Documentation (interval: {$interval}s) ===");
+        $this->info("Atlas :: Watcher Documentation (interval: {$interval}s)");
 
         $featuresPath = app_path('Features');
 
@@ -83,7 +83,7 @@ class WatchDocs extends Command
                     (new FeatureGenerator($feature))->addPhpDoc($controllerPath);
                     (new DocGenerator($feature))->generate();
 
-                    $this->call('scribe:generate', ['--force' => true]);
+                    $this->call('scribe:generate');
 
                     $this->info("Documentation mise à jour pour {$feature}");
                 } catch (\Throwable $e) {

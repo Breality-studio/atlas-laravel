@@ -27,8 +27,7 @@ class AtlasServiceProvider extends ServiceProvider
             \Breality\AtlasCore\Commands\ListServices::class,
             \Breality\AtlasCore\Commands\WatchDocs::class,
             \Breality\AtlasCore\Commands\RegenDocs::class,
-
-            // \Breality\AtlasCore\Commands\AtlasGenerateDocs::class
+            \Breality\AtlasCore\Commands\AtlasGenerateDocs::class
         ]);
 
         $this->autoBindContracts();

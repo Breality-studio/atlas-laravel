@@ -2,9 +2,9 @@
 
 namespace Breality\AtlasCore\Commands;
 
-use Breality\AtlasCore\Generators\ContractGenerator;
 use Illuminate\Console\Command;
-use Breality\AtlasCore\Generators\ServiceGenerator;
+use Breality\Atlas\Generators\ContractGenerator;
+use Breality\Atlas\Generators\ServiceGenerator;
 
 /**
  * Class MakeService

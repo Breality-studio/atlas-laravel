@@ -4,432 +4,471 @@ namespace Breality\AtlasCore\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
+use Symfony\Component\Process\Process;
 use PDO;
 use PDOException;
-use Symfony\Component\Process\Process;
 
 class AtlasSetup extends Command
 {
     protected $signature = 'atlas:setup
                             {--name= : Nom du projet (facultatif, détecté automatiquement si non fourni)}
-                            {--vendor= : Nom du vendor pour composer.json (facultatif)}
                             {--db=mysql : Type de base de données (mysql, pgsql, sqlite)}
                             {--host= : Host de la base de données (facultatif)}
                             {--port= : Port de la base de données (facultatif)}
                             {--user= : Utilisateur de la base de données (facultatif)}
                             {--password= : Mot de passe de la base de données (facultatif)}
-                            {--frontend= : Stack frontend (blade, api, livewire, inertia-vue, inertia-react, breeze-blade, breeze-api, breeze-livewire, breeze-inertia-vue, breeze-inertia-react, jetstream-livewire, jetstream-api, jetstream-inertia-vue, jetstream-inertia-react) (facultatif)}';
+                            {--frontend= : Stack frontend (blade, api, livewire, inertia-vue, inertia-react, breeze-*, jetstream-*) (facultatif)}
+                            {--no-db : Ne pas tenter de créer les bases de données}
+                            {--skip-npm : Ne pas exécuter les commandes NPM}';
 
-    protected $description = 'Initialisation du projet Breality Atlas';
+    protected $description = 'Initialisation complète et interactive du projet Breality Atlas';
 
     public function handle()
     {
-        $this->info('=== Bienvenue dans Breality Atlas Setup ===');
-
-        // Détection si l'environnement est interactif
-        $isInteractive = $this->isInteractive();
-
-        // 1. Nom du projet – détection automatique si non fourni
-        $defaultProjectName = basename(base_path());
-        $projectName = $this->option('name') ?: ($isInteractive ? $this->ask('Nom du projet', $defaultProjectName) : $defaultProjectName);
-
-        // Nom du vendor pour composer.json
-        $defaultVendor = $projectName ?? 'breality';
-        $vendor = $this->option('vendor') ?: ($isInteractive ? $this->ask('Nom du vendor (pour composer.json)', $defaultVendor) : $defaultVendor);
-
-        $dbType = $this->option('db') ?: ($isInteractive ? $this->choice('Type de base de données', ['mysql', 'pgsql', 'sqlite'], 'mysql') : 'mysql');
-
-        // Valeurs par défaut pour la DB, avec prompts si interactif
-        $defaultHost = $dbType !== 'sqlite' ? '127.0.0.1' : null;
-        $dbHost = $this->option('host') ?: ($dbType !== 'sqlite' && $isInteractive ? $this->ask('Host DB', $defaultHost) : $defaultHost);
-
-        $defaultPort = $dbType === 'pgsql' ? '5432' : ($dbType === 'mysql' ? '3306' : null);
-        $dbPort = $this->option('port') ?: ($dbType !== 'sqlite' && $isInteractive ? $this->ask('Port DB', $defaultPort) : $defaultPort);
-
-        $defaultUser = $dbType !== 'sqlite' ? 'root' : null;
-        $dbUser = $this->option('user') ?: ($dbType !== 'sqlite' && $isInteractive ? $this->ask('User DB', $defaultUser) : $defaultUser);
-
-        $dbPassword = $this->option('password');
-        if ($dbPassword === null && $dbType !== 'sqlite') {
-            $dbPassword = $isInteractive ? ($this->secret('Password DB') ?? '') : '';
+        // Protection contre exécution pendant package:discover
+        if (app()->runningInConsole() && $this->getOutput()->isDebug()) {
+            $this->warn('Mode package:discover détecté. Exécution d\'AtlasSetup ignorée.');
+            return 0;
         }
 
-        $slugProjectName = strtolower(preg_replace('/[^a-z0-9]/', '_', $projectName));
+        $this->info('=== Bienvenue dans Breality Atlas Setup ===');
+        $this->newLine();
+
+        try {
+            $this->executeSetup();
+            $this->displaySuccessSummary();
+            return 0;
+        } catch (\Exception $e) {
+            $this->error('Erreur critique : ' . $e->getMessage());
+            if ($this->output->isVerbose()) {
+                $this->error($e->getTraceAsString());
+            }
+            return 1;
+        }
+    }
+
+    protected function executeSetup(): void
+    {
+        $isInteractive = $this->isInteractive();
+
+        // 1. Nom du projet
+        $projectName = $this->getProjectName($isInteractive);
+        $slugProjectName = $this->generateSlug($projectName);
         $localDbName = $slugProjectName . '_db';
         $testDbName = $slugProjectName . '_test';
 
-        // 2. Mise à jour de composer.json
-        $composerPath = base_path('composer.json');
-        if (File::exists($composerPath)) {
-            $composer = json_decode(File::get($composerPath), true);
-            $newPackageName = strtolower($vendor) . '/' . strtolower(preg_replace('/[^a-z0-9]/', '-', $projectName));
-            $composer['name'] = $newPackageName;
+        $this->info("Projet : {$projectName} ({$slugProjectName})");
 
-            // Optionnel : mise à jour de la description
-            $defaultDescription = $composer['description'] ?? 'Mon projet Atlas Laravel';
-            $description = $isInteractive ? $this->ask('Description du projet', $defaultDescription) : $defaultDescription;
-            $composer['description'] = $description;
+        // 2. Configuration base de données
+        $dbConfig = $this->getDatabaseConfig($isInteractive, $localDbName, $testDbName);
+        $skipDbCreation = (bool) $this->option('no-db');
+        $this->createDatabases($dbConfig, $skipDbCreation, $localDbName, $testDbName);
 
-            // Suppression du repository VCS si présent
-            unset($composer['repositories']);
+        // 3. Nettoyage composer.json
+        $this->updateComposerJson();
 
-            File::put($composerPath, json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-            $this->info('composer.json mis à jour avec le nouveau nom de package : ' . $newPackageName);
-        } else {
-            $this->warn('Fichier composer.json non trouvé. Mise à jour ignorée.');
+        // 4. Publication configuration Atlas
+        $this->publishAtlasConfig();
+
+        // 5. Mise à jour .env
+        $this->updateEnvFile($dbConfig, $projectName);
+
+        // 6. Stack frontend
+        $frontendStack = $this->selectFrontendStack($isInteractive);
+        $this->installFrontendStack($frontendStack);
+
+        // 7. Packages supplémentaires
+        if ($isInteractive) {
+            $this->installAdditionalPackages();
         }
 
-        // 3. Publication de la configuration Atlas
-        if (!File::exists(config_path('atlas.php'))) {
-            $this->call('vendor:publish', [
-                '--tag' => 'atlas-config',
-                '--force' => true,
-            ]);
-            $this->info('Config Atlas publiée.');
+        // 8. Synchronisation Composer
+        $this->synchronizeDependencies();
+
+        // 9. NPM
+        if (!$this->option('skip-npm')) {
+            $this->runNpmInstall($frontendStack);
         }
 
-        // 4. Création des dossiers Atlas
-        $atlasDirs = [
-            base_path('atlas/Core'),
-            base_path('atlas/Generators'),
-            base_path('atlas/Docs'),
-            base_path('atlas/Tests'),
+        // 10. Clé d'application
+        $this->generateAppKey();
+    }
+
+    private function getProjectName(bool $isInteractive): string
+    {
+        $default = basename(base_path());
+        $name = $this->option('name') ?: ($isInteractive ? $this->ask('Nom du projet', $default) : $default);
+        return trim(preg_replace("/['\"]/", '', $name));
+    }
+
+    private function generateSlug(string $name): string
+    {
+        return strtolower(preg_replace('/[^a-z0-9]/', '_', $name));
+    }
+
+    private function getDatabaseConfig(bool $isInteractive, string $localDbName, string $testDbName): array
+    {
+        $dbType = $this->option('db') ?: ($isInteractive 
+            ? $this->choice('Type de base de données', ['mysql', 'pgsql', 'sqlite'], 'mysql')
+            : 'mysql'
+        );
+
+        if ($dbType === 'sqlite') {
+            return [
+                'connection' => 'sqlite',
+                'database' => $localDbName,
+                'test_database' => $testDbName,
+                'host' => null,
+                'port' => null,
+                'username' => null,
+                'password' => null,
+            ];
+        }
+
+        $host = $this->option('host') ?: ($isInteractive ? $this->ask('Host DB', '127.0.0.1') : '127.0.0.1');
+        $port = $this->option('port') ?: ($isInteractive ? $this->ask('Port DB', $dbType === 'pgsql' ? '5432' : '3306') : ($dbType === 'pgsql' ? '5432' : '3306'));
+        $user = $this->option('user') ?: ($isInteractive ? $this->ask('Utilisateur DB', 'root') : 'root');
+        $pass = $this->option('password') ?: ($isInteractive ? $this->secret('Mot de passe DB') : '');
+
+        return [
+            'connection' => $dbType,
+            'database' => $localDbName,
+            'test_database' => $testDbName,
+            'host' => $host,
+            'port' => $port,
+            'username' => $user,
+            'password' => $pass,
         ];
+    }
 
-        foreach ($atlasDirs as $dir) {
-            if (!File::exists($dir)) {
-                File::makeDirectory($dir, 0755, true);
-                $this->info("Dossier créé : $dir");
-            }
+    private function createDatabases(array $config, bool $skip, string $localDbName, string $testDbName): void
+    {
+        if ($skip) {
+            $this->warn('Création des bases de données désactivée (--no-db)');
+            return;
         }
 
-        // 5. Création des bases de données (avec gestion d'erreurs améliorée)
         $this->info('Configuration des bases de données...');
 
-        try {
-            if ($dbType === 'sqlite') {
-                $localPath = database_path("{$localDbName}.sqlite");
-                $testPath = database_path("{$testDbName}.sqlite");
-
-                if (!File::exists($localPath)) {
-                    File::put($localPath, '');
-                }
-                if (!File::exists($testPath)) {
-                    File::put($testPath, '');
-                }
-
-                $this->info("Bases SQLite créées : {$localPath}, {$testPath}");
-            } else {
-                $pdoDsn = "{$dbType}:host={$dbHost};port={$dbPort}";
-                $pdo = new PDO($pdoDsn, $dbUser, $dbPassword);
-                $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-
-                $pdo->exec("CREATE DATABASE IF NOT EXISTS `{$localDbName}`");
-                $pdo->exec("CREATE DATABASE IF NOT EXISTS `{$testDbName}`");
-
-                $this->info("Bases de données créées : {$localDbName} et {$testDbName}");
-            }
-        } catch (PDOException $e) {
-            $this->warn("Impossible de créer les bases de données automatiquement : " . $e->getMessage());
-            $this->comment("Vous devrez créer manuellement les bases {$localDbName} et {$testDbName} ou ajuster les paramètres dans .env.");
+        if ($config['connection'] === 'sqlite') {
+            File::put(database_path("{$localDbName}.sqlite"), '');
+            File::put(database_path("{$testDbName}.sqlite"), '');
+            $this->info("Bases SQLite créées : {$localDbName}.sqlite, {$testDbName}.sqlite");
+            return;
         }
 
-        // 6. Mise à jour du fichier .env
+        try {
+            $dsn = "{$config['connection']}:host={$config['host']};port={$config['port']}";
+            $pdo = new PDO($dsn, $config['username'], $config['password']);
+            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $pdo->exec("CREATE DATABASE IF NOT EXISTS `{$localDbName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+            $pdo->exec("CREATE DATABASE IF NOT EXISTS `{$testDbName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+            $this->info("Bases créées : {$localDbName}, {$testDbName}");
+        } catch (PDOException $e) {
+            $this->warn('Impossible de créer les bases automatiquement : ' . $e->getMessage());
+            $this->line("Créez manuellement : {$localDbName} et {$testDbName}");
+        }
+    }
+
+    private function updateComposerJson(): void
+    {
+        $path = base_path('composer.json');
+        if (File::exists($path)) {
+            $composer = json_decode(File::get($path), true);
+            if (isset($composer['repositories'])) {
+                unset($composer['repositories']);
+                File::put($path, json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+                $this->info('composer.json nettoyé (repositories supprimés)');
+            }
+        }
+    }
+
+    private function publishAtlasConfig(): void
+    {
+        if (!File::exists(config_path('atlas.php'))) {
+            try {
+                $this->call('vendor:publish', ['--tag' => 'atlas-config', '--force' => true]);
+                $this->info('Configuration Atlas publiée');
+            } catch (\Exception $e) {
+                $this->warn('Publication de la config ignorée : ' . $e->getMessage());
+            }
+        }
+    }
+
+    private function updateEnvFile(array $dbConfig, string $projectName): void
+    {
         $envPath = base_path('.env');
         if (!File::exists($envPath)) {
             File::copy(base_path('.env.example'), $envPath);
-            $this->info('.env généré à partir de .env.example');
         }
-
-        $envContent = file_get_contents($envPath);
 
         $replacements = [
-            'APP_NAME' => preg_replace("/['\"]/", '', $projectName),
-            'DB_CONNECTION' => $dbType,
-            'DB_HOST' => $dbHost ?? '',
-            'DB_PORT' => $dbPort ?? '',
-            'DB_DATABASE' => $localDbName,
-            'DB_USERNAME' => $dbUser ?? '',
-            'DB_PASSWORD' => $dbPassword ?? '',
+            'APP_NAME' => '"' . addslashes($projectName) . '"',
+            'DB_CONNECTION' => $dbConfig['connection'],
+            'DB_HOST' => $dbConfig['host'] ?? '',
+            'DB_PORT' => $dbConfig['port'] ?? '',
+            'DB_DATABASE' => $dbConfig['database'],
+            'DB_USERNAME' => $dbConfig['username'] ?? '',
+            'DB_PASSWORD' => '"' . addslashes($dbConfig['password'] ?? '') . '"',
         ];
 
+        $content = File::get($envPath);
         foreach ($replacements as $key => $value) {
-            $pattern = "/^{$key}=(.*)$/m";
-            if (preg_match($pattern, $envContent)) {
-                $envContent = preg_replace($pattern, "{$key}=" . addslashes($value), $envContent);
+            $pattern = "/^{$key}=.*$/m";
+            if (preg_match($pattern, $content)) {
+                $content = preg_replace($pattern, "{$key}={$value}", $content);
             } else {
-                $envContent .= "\n{$key}={$value}";
+                $content .= "\n{$key}={$value}";
             }
         }
 
-        file_put_contents($envPath, $envContent);
-        $this->info('.env mis à jour avec les paramètres par défaut.');
+        File::put($envPath, $content);
+        $this->info('.env configuré');
+    }
 
-        // 7. Configuration du moteur de template / stack frontend
-        $defaultFrontend = 'blade';
-        $frontendOptions = [
-            'blade' => 'Blade (défaut, avec vues de base)',
-            'api' => 'API only (avec Sanctum, sans frontend)',
-            'livewire' => 'Livewire',
-            'inertia-vue' => 'Inertia avec Vue',
-            'inertia-react' => 'Inertia avec React',
-            'breeze-blade' => 'Breeze avec Blade',
-            'breeze-api' => 'Breeze avec API (Sanctum)',
-            'breeze-livewire' => 'Breeze avec Livewire',
-            'breeze-inertia-vue' => 'Breeze avec Inertia + Vue',
-            'breeze-inertia-react' => 'Breeze avec Inertia + React',
-            'jetstream-livewire' => 'Jetstream avec Livewire',
-            'jetstream-api' => 'Jetstream avec API (Sanctum)',
-            'jetstream-inertia-vue' => 'Jetstream avec Inertia + Vue',
-            'jetstream-inertia-react' => 'Jetstream avec Inertia + React',
-        ];
-        $frontendLabel = $isInteractive ? $this->choice('Choisissez le stack frontend / moteur de template', array_values($frontendOptions), $frontendOptions[$defaultFrontend]) : $frontendOptions[$defaultFrontend];
-        $frontendKey = $this->option('frontend') ?: array_search($frontendLabel, $frontendOptions) ?: $defaultFrontend;
+    private function selectFrontendStack(bool $isInteractive): string
+    {
+        $stack = $this->option('frontend') ?: 'blade';
 
-        $this->info("Configuration du stack frontend : {$frontendOptions[$frontendKey]}");
-
-        // Installation basée sur le choix
-        $this->installFrontendStack($frontendKey);
-
-        // 8. Installations supplémentaires
         if ($isInteractive) {
-            $additionalPackages = $this->ask('Voulez-vous installer des packages supplémentaires ? (séparés par virgule, ex: package1,package2:dev)', '');
-            if (!empty($additionalPackages)) {
-                $packages = array_map('trim', explode(',', $additionalPackages));
-                foreach ($packages as $pkg) {
-                    $isDev = str_ends_with($pkg, ':dev');
-                    $pkgName = $isDev ? str_replace(':dev', '', $pkg) : $pkg;
-                    $this->installPackage($pkgName, $isDev);
-                }
+            $choice = $this->choice(
+                'Stack frontend souhaité',
+                [
+                    'blade'              => 'Blade (défaut)',
+                    'api'                => 'API only (Sanctum)',
+                    'livewire'           => 'Livewire',
+                    'inertia-vue'        => 'Inertia + Vue 3',
+                    'inertia-react'      => 'Inertia + React',
+                    'breeze'             => 'Laravel Breeze (préciser variante ensuite)',
+                    'jetstream'          => 'Laravel Jetstream (préciser variante ensuite)',
+                ],
+                'blade'
+            );
+
+            $stack = array_search($choice, [
+                'blade', 'api', 'livewire', 'inertia-vue', 'inertia-react', 'breeze', 'jetstream'
+            ]);
+
+            if (in_array($stack, ['breeze', 'jetstream'])) {
+                $variant = $this->ask("Variante {$stack} (ex: blade, api, livewire, inertia-vue, inertia-react)");
+                $stack .= '-' . $variant;
             }
         }
 
-        // 9. Installation finale des dépendances Composer
-        $this->newLine();
-        $this->info('Installation des dépendances Composer (composer install)...');
-        $process = new Process(['composer', 'install', '--optimize-autoloader', '--no-interaction']);
-        $process->setTimeout(null);
+        $this->info("Stack sélectionné : {$stack}");
+        return $stack;
+    }
+
+    protected function installFrontendStack(string $stack): void
+    {
+        static $executed = [];
+        if (isset($executed[$stack])) {
+            $this->info("Stack {$stack} déjà installé.");
+            return;
+        }
+        $executed[$stack] = true;
+
+        $this->line("Installation du stack {$stack}...");
+
+        if (str_starts_with($stack, 'breeze-')) {
+            $flavor = substr($stack, 7);
+            $this->installPackage('laravel/breeze', true);
+            $this->call('breeze:install', ['stack' => $flavor]);
+            $this->runNpmCommand(['install']);
+            $this->runNpmCommand(['run', 'build']);
+        } elseif (str_starts_with($stack, 'jetstream-')) {
+            $flavor = substr($stack, 10);
+            $parts = explode('-', $flavor);
+            $base = array_shift($parts);
+            $this->installPackage('laravel/jetstream');
+            $options = ['stack' => $base];
+            if (in_array('api', $parts)) $options['--api'] = true;
+            if (in_array('react', $parts)) $options['--react'] = true;
+            $this->call('jetstream:install', $options);
+            $this->runNpmCommand(['install']);
+            $this->runNpmCommand(['run', 'build']);
+        } elseif ($stack === 'api') {
+            $this->installApiStack();
+        } elseif ($stack === 'livewire') {
+            $this->installPackage('livewire/livewire');
+        } elseif ($stack === 'inertia-vue') {
+            $this->installPackage('inertiajs/inertia-laravel');
+            $this->runNpmCommand(['install', '@inertiajs/vue3']);
+        } elseif ($stack === 'inertia-react') {
+            $this->installPackage('inertiajs/inertia-laravel');
+            $this->runNpmCommand(['install', '@inertiajs/react']);
+        } else {
+            $this->installBladeStack();
+        }
+    }
+    private function installApiStack(): void
+    {
+        $this->call('vendor:publish', ['--provider' => 'Laravel\Sanctum\SanctumServiceProvider']);
+        $this->createApiExample();
+        $this->cleanupWebViews();
+        $this->info('Stack API installé');
+    }
+
+    private function installBladeStack(): void
+    {
+        $this->createWelcomeController();
+        $this->updateWebRoutes();
+        $this->info('Stack Blade installé');
+    }
+
+    private function createWelcomeController(): void
+    {
+        $path = app_path('Http/Controllers/WelcomeController.php');
+        if (!File::exists($path)) {
+            File::put($path, $this->getWelcomeControllerStub());
+            $this->info('WelcomeController créé');
+        }
+    }
+
+    private function updateWebRoutes(): void
+    {
+        $path = base_path('routes/web.php');
+        $content = File::get($path);
+        if (!str_contains($content, 'WelcomeController')) {
+            $content = str_replace("view('welcome')", "[\\App\\Http\\Controllers\\WelcomeController::class, 'index']", $content);
+            File::put($path, $content);
+            $this->info('Route web mise à jour');
+        }
+    }
+
+    private function createApiExample(): void
+    {
+        $dir = app_path('Http/Controllers/Api');
+        File::makeDirectory($dir, 0755, true);
+        $controllerPath = $dir . '/ExampleController.php';
+        if (!File::exists($controllerPath)) {
+            File::put($controllerPath, $this->getApiControllerStub());
+        }
+
+        $routesPath = base_path('routes/api.php');
+        $routesContent = File::get($routesPath);
+        if (!str_contains($routesContent, 'ExampleController')) {
+            File::append($routesPath, "\nRoute::get('/example', [\\App\\Http\\Controllers\\Api\\ExampleController::class, 'index']);");
+        }
+        $this->info('Exemple API créé');
+    }
+
+    private function cleanupWebViews(): void
+    {
+        $viewPath = resource_path('views/welcome.blade.php');
+        if (File::exists($viewPath)) {
+            File::delete($viewPath);
+            $this->info('Vue welcome supprimée (mode API)');
+        }
+    }
+
+    private function installAdditionalPackages(): void
+    {
+        $input = $this->ask('Packages supplémentaires (séparés par virgule, :dev pour dev)');
+        if (trim($input) === '') {
+            return;
+        }
+
+        foreach (explode(',', $input) as $pkg) {
+            $pkg = trim($pkg);
+            if ($pkg === '') continue;
+            $dev = str_ends_with($pkg, ':dev');
+            $packageName = $dev ? substr($pkg, 0, -4) : $pkg;
+            $this->installPackage($packageName, $dev);
+        }
+    }
+
+    private function synchronizeDependencies(): void
+    {
+        $this->info('Synchronisation des dépendances Composer...');
+        $process = new Process([
+            'composer', 'update', '--optimize-autoloader', '--no-interaction', '--no-scripts'
+        ], base_path());
+        $process->setTimeout(900);
         $process->run(function ($type, $buffer) {
             $this->output->write($buffer);
         });
 
-        if (!$process->isSuccessful()) {
-            $this->error('Échec de l\'installation des dépendances Composer.');
-            return 1;
-        }
-        $this->info('Dépendances Composer installées avec succès.');
+        $this->info($process->isSuccessful() ? 'Dépendances synchronisées' : 'Échec Composer');
+    }
 
-        // 10. Installation des dépendances Node.js si nécessaire
-        $frontendNeedsNpm = in_array($frontendKey, [
-            'inertia-vue',
-            'inertia-react',
-            'breeze-blade',
-            'breeze-livewire',
-            'breeze-inertia-vue',
-            'breeze-inertia-react',
-            'jetstream-livewire',
-            'jetstream-inertia-vue',
-            'jetstream-inertia-react'
-        ]);
+    private function runNpmInstall(string $frontendStack): void
+    {
+        $needsNpm = str_contains($frontendStack, 'inertia') ||
+                    str_starts_with($frontendStack, 'breeze-') ||
+                    str_starts_with($frontendStack, 'jetstream-');
 
-        if ($frontendNeedsNpm && File::exists(base_path('package.json'))) {
-            $this->newLine();
-            $this->info('Installation des dépendances NPM (npm install)...');
+        if ($needsNpm && File::exists(base_path('package.json'))) {
+            $this->info('Installation des dépendances NPM...');
             $this->runNpmCommand(['install']);
-            $this->info('Dépendances NPM installées. Vous pouvez lancer le frontend avec : npm run dev');
+            $this->runNpmCommand(['run', 'build']);
         }
+    }
 
-        // 11. Génération de la clé d'application
-        $this->newLine();
+    private function runNpmCommand(array $command): void
+    {
+        $process = new Process(array_merge(['npm'], $command), base_path());
+        $process->setTimeout(600);
+        $process->run(function ($type, $buffer) {
+            $this->output->write($buffer);
+        });
+
+        $this->line($process->isSuccessful() ? 'NPM réussi' : 'Échec NPM');
+    }
+
+    private function generateAppKey(): void
+    {
         $this->info('Génération de la clé d\'application...');
-        $this->call('key:generate', ['--ansi' => true, '--force' => true]);
-
-        $this->newLine();
-        $this->info('=== Breality Atlas Setup terminé avec succès ===');
-        $this->comment('Vous pouvez maintenant :');
-        $this->line('• Exécuter les migrations : php artisan migrate');
-        $this->line('• Lancer le serveur : php artisan serve');
-        $this->line('• Compiler les assets (si frontend) : npm run dev');
-        $this->line('• Utiliser les commandes Atlas : php artisan atlas:make ...');
-
-        return 0;
+        $this->call('key:generate', ['--force' => true]);
+        $this->info('Clé générée');
     }
 
-    /**
-     * Vérifie si l'environnement est interactif (TTY disponible).
-     */
-    protected function isInteractive(): bool
+    private function installPackage(string $package, bool $dev = false): void
     {
-        return function_exists('posix_isatty') && posix_isatty(STDIN);
-    }
+        $this->info("Installation de {$package}" . ($dev ? ' (dev)' : ''));
 
-    /**
-     * Installe un package via Composer.
-     */
-    protected function installPackage(string $package, bool $dev = false): void
-    {
-        $this->info("Installation de {$package}" . ($dev ? ' (--dev)' : '') . '...');
         $command = ['composer', 'require', $package];
         if ($dev) {
             $command[] = '--dev';
         }
-        $process = new Process($command);
+
+        $process = new Process($command, base_path(), ['COMPOSER_MEMORY_LIMIT' => '-1']);
         $process->setTimeout(600);
         $process->run(function ($type, $buffer) {
             $this->output->write($buffer);
         });
-        if (!$process->isSuccessful()) {
-            $this->error("Échec de l'installation de {$package}.");
-        } else {
-            $this->info("{$package} installé avec succès.");
-        }
+
+        $this->info($process->isSuccessful() ? "{$package} installé" : "Échec {$package}");
     }
 
-    /**
-     * Exécute une commande Artisan.
-     */
-    protected function runArtisanCommand(array $command): void
+    private function displaySuccessSummary(): void
     {
-        $process = new Process(array_merge(['php', 'artisan'], $command));
-        $process->setTimeout(600);
-        $process->run(function ($type, $buffer) {
-            $this->output->write($buffer);
-        });
-        if (!$process->isSuccessful()) {
-            $this->error('Échec de la commande Artisan : ' . implode(' ', $command));
-        }
+        $this->newLine(2);
+        $this->info('=== Breality Atlas Setup terminé avec succès ===');
+        $this->newLine();
+        $this->line('Prochaines étapes :');
+        $this->line('   php artisan migrate');
+        $this->line('   php artisan serve');
+        $this->line('   npm run dev');
+        $this->newLine();
+        $this->line('Commandes Atlas :');
+        $this->line('   php artisan atlas:make-feature NomFeature');
+        $this->line('   php artisan atlas:make-service NomService');
+        $this->newLine();
     }
 
-    /**
-     * Exécute une commande NPM.
-     */
-    protected function runNpmCommand(array $command): void
+    protected function isInteractive(): bool
     {
-        $process = new Process(array_merge(['npm'], $command));
-        $process->setTimeout(600);
-        $process->run(function ($type, $buffer) {
-            $this->output->write($buffer);
-        });
-        if (!$process->isSuccessful()) {
-            $this->error('Échec de la commande NPM : ' . implode(' ', $command));
-        } else {
-            $this->info('Commande NPM exécutée avec succès.');
-        }
+        return $this->input->isInteractive() && (function_exists('stream_isatty') ? stream_isatty(STDIN) : true);
     }
 
-    /**
-     * Installe le stack frontend choisi.
-     */
-    protected function installFrontendStack(string $stack): void
+    private function getWelcomeControllerStub(): string
     {
-        switch ($stack) {
-            case 'api':
-                $this->runArtisanCommand(['vendor:publish', '--provider=Laravel\Sanctum\SanctumServiceProvider']);
-                if (!File::exists(app_path('Http/Controllers/Api/ExampleController.php'))) {
-                    File::makeDirectory(app_path('Http/Controllers/Api'), 0755, true);
-                    File::put(app_path('Http/Controllers/Api/ExampleController.php'), "<?php\n\nnamespace App\\Http\\Controllers\\Api;\n\nuse App\\Http\\Controllers\\Controller;\n\nclass ExampleController extends Controller\n{\n    public function index()\n    {\n        return response()->json(['message' => 'API ready']);\n    }\n}");
-                    $this->info('Controller API de base créé.');
-                }
-                $apiRoutesPath = base_path('routes/api.php');
-                $apiRoutesContent = File::get($apiRoutesPath);
-                if (strpos($apiRoutesContent, 'ExampleController') === false) {
-                    File::append($apiRoutesPath, "\nRoute::get('/example', [ExampleController::class, 'index']);");
-                    $this->info('Route API de base ajoutée.');
-                }
-                File::delete(resource_path('views/welcome.blade.php'));
-                $this->info('Vues web supprimées pour mode API only.');
-                break;
+        return "<?php\n\nnamespace App\\Http\\Controllers;\n\nuse Illuminate\\View\\View;\n\nclass WelcomeController extends Controller\n{\n    public function index(): View\n    {\n        return view('welcome');\n    }\n}\n";
+    }
 
-            case 'livewire':
-                $this->installPackage('livewire/livewire');
-                break;
-
-            case 'inertia-vue':
-                $this->installPackage('inertiajs/inertia-laravel');
-                $this->runNpmCommand(['install', '@inertiajs/vue3']);
-                break;
-
-            case 'inertia-react':
-                $this->installPackage('inertiajs/inertia-laravel');
-                $this->runNpmCommand(['install', '@inertiajs/react']);
-                break;
-
-            case 'breeze-blade':
-                $this->installPackage('laravel/breeze', true);
-                $this->runArtisanCommand(['breeze:install', 'blade']);
-                $this->runNpmCommand(['install']);
-                $this->runNpmCommand(['run', 'build']);
-                break;
-
-            case 'breeze-api':
-                $this->installPackage('laravel/breeze', true);
-                $this->runArtisanCommand(['breeze:install', 'api']);
-                break;
-
-            case 'breeze-livewire':
-                $this->installPackage('laravel/breeze', true);
-                $this->runArtisanCommand(['breeze:install', 'livewire']);
-                $this->runNpmCommand(['install']);
-                $this->runNpmCommand(['run', 'build']);
-                break;
-
-            case 'breeze-inertia-vue':
-                $this->installPackage('laravel/breeze', true);
-                $this->runArtisanCommand(['breeze:install', 'vue']);
-                $this->runNpmCommand(['install']);
-                $this->runNpmCommand(['run', 'build']);
-                break;
-
-            case 'breeze-inertia-react':
-                $this->installPackage('laravel/breeze', true);
-                $this->runArtisanCommand(['breeze:install', 'react']);
-                $this->runNpmCommand(['install']);
-                $this->runNpmCommand(['run', 'build']);
-                break;
-
-            case 'jetstream-livewire':
-                $this->installPackage('laravel/jetstream');
-                $this->runArtisanCommand(['jetstream:install', 'livewire']);
-                $this->runNpmCommand(['install']);
-                $this->runNpmCommand(['run', 'build']);
-                break;
-
-            case 'jetstream-api':
-                $this->installPackage('laravel/jetstream');
-                $this->runArtisanCommand(['jetstream:install', 'livewire', '--api']);
-                $this->runNpmCommand(['install']);
-                $this->runNpmCommand(['run', 'build']);
-                break;
-
-            case 'jetstream-inertia-vue':
-                $this->installPackage('laravel/jetstream');
-                $this->runArtisanCommand(['jetstream:install', 'inertia']);
-                $this->runNpmCommand(['install']);
-                $this->runNpmCommand(['run', 'build']);
-                break;
-
-            case 'jetstream-inertia-react':
-                $this->installPackage('laravel/jetstream');
-                $this->runArtisanCommand(['jetstream:install', 'inertia', '--react']);
-                $this->runNpmCommand(['install']);
-                $this->runNpmCommand(['run', 'build']);
-                break;
-
-            case 'blade':
-            default:
-                $this->info('Stack Blade par défaut sélectionné. Configuration des éléments de base...');
-                if (!File::exists(app_path('Http/Controllers/WelcomeController.php'))) {
-                    File::put(app_path('Http/Controllers/WelcomeController.php'), "<?php\n\nnamespace App\\Http\\Controllers;\n\nuse Illuminate\\View\\View;\n\nclass WelcomeController extends Controller\n{\n    public function index(): View\n    {\n        return view('welcome');\n    }\n}");
-                    $this->info('Controller de base créé.');
-                }
-                $webRoutesPath = base_path('routes/web.php');
-                $webRoutesContent = File::get($webRoutesPath);
-                if (strpos($webRoutesContent, 'WelcomeController') === false) {
-                    $webRoutesContent = str_replace("view('welcome')", "WelcomeController::class . '@index'", $webRoutesContent);
-                    File::put($webRoutesPath, $webRoutesContent);
-                    $this->info('Route web de base mise à jour.');
-                }
-                break;
-        }
+    private function getApiControllerStub(): string
+    {
+        return "<?php\n\nnamespace App\\Http\\Controllers\\Api;\n\nuse App\\Http\\Controllers\\Controller;\n\nclass ExampleController extends Controller\n{\n    public function index()\n    {\n        return response()->json([\n            'message' => 'Breality Atlas API prête !',\n            'status' => 'active'\n        ]);\n    }\n}\n";
     }
 }

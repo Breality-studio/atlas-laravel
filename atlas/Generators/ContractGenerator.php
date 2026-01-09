@@ -1,6 +1,6 @@
 <?php
 
-namespace Breality\AtlasCore\Generators;
+namespace Breality\Atlas\Generators;
 
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;

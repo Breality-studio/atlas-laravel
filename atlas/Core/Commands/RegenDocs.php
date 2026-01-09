@@ -3,7 +3,7 @@
 namespace Breality\AtlasCore\Commands;
 
 use Illuminate\Console\Command;
-use Breality\AtlasCore\Generators\DocGenerator;
+use Breality\Atlas\Generators\DocGenerator;
 use Illuminate\Support\Facades\File;
 
 /**

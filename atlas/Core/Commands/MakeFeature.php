@@ -3,10 +3,10 @@
 namespace Breality\AtlasCore\Commands;
 
 use Illuminate\Console\Command;
-use Breality\AtlasCore\Generators\FeatureGenerator;
-use Breality\AtlasCore\Generators\RouteWriter;
-use Breality\AtlasCore\Generators\TestGenerator;
-use Breality\AtlasCore\Generators\DocGenerator;
+use Breality\Atlas\Generators\FeatureGenerator;
+use Breality\Atlas\Generators\RouteWriter;
+use Breality\Atlas\Generators\TestGenerator;
+use Breality\Atlas\Generators\DocGenerator;
 
 /**
  * Class MakeFeature
